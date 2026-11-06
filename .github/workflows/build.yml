@@ -32,9 +32,20 @@ jobs:
           python3 inspect.py libvarfix.dylib
           sha256sum libvarfix.dylib
 
+      - name: build sbwatch
+        run: |
+          clang -target arm64-apple-ios16.5 -O2 -fPIC -dynamiclib -nostdlib -fuse-ld=lld \
+            -Wl,-undefined,dynamic_lookup \
+            -Wl,-install_name,/redwood/lib/libsbwatch.dylib \
+            -Wl,-platform_version,ios,16.5,16.5 \
+            -o libsbwatch.dylib libsbwatch.c
+          python3 inspect.py libsbwatch.dylib
+          sha256sum libsbwatch.dylib
+
       - uses: actions/upload-artifact@v4
         with:
           name: hakios-helpers
           path: |
             varfix_*
             libvarfix.dylib
+            libsbwatch.dylib
