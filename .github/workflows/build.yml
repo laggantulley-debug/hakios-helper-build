@@ -1,64 +1,28 @@
 name: build-ios-helpers
-
 on:
   push:
     branches: [ main ]
   workflow_dispatch:
-
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: 工具链
-        run: |
-          clang --version
-          ld.lld --version || true
-
-      - name: 编 varfix（纯系统调用，静态 Mach-O，arm64）
-        run: |
-          clang -target arm64-apple-ios16.5 -O2 -nostdlib -fno-stack-protector \
-                -Wl,-e,_start -Wl,-platform_version,ios,16.5,16.5 \
-                -o varfix varfix_nolibc.c
-          file varfix || true
-          python3 - <<'PY'
-import struct
-d=open('varfix','rb').read()
-m,ct,cs,ft,nc,sc,fl,_=struct.unpack_from('<IiiIIIII',d,0)
-print('magic',hex(m),'filetype',ft,'(2=MH_EXECUTE) ncmds',nc)
-off=32
-for _ in range(nc):
-    c,s=struct.unpack_from('<II',d,off)
-    print('  cmd',hex(c),'size',s); off+=s
-print('size',len(d))
-PY
-          shasum -a 256 varfix
-
-      - name: 编 libvarfix.dylib（dynamic_lookup，arm64）
-        run: |
-          clang -target arm64-apple-ios16.5 -O2 -fPIC -dynamiclib -nostdlib \
-                -Wl,-undefined,dynamic_lookup \
-                -Wl,-install_name,/redwood/lib/libvarfix.dylib \
-                -Wl,-platform_version,ios,16.5,16.5 \
-                -o libvarfix.dylib libvarfix_dl.c
-          file libvarfix.dylib || true
-          python3 - <<'PY'
-import struct
-d=open('libvarfix.dylib','rb').read()
-m,ct,cs,ft,nc,sc,fl,_=struct.unpack_from('<IiiIIIII',d,0)
-print('magic',hex(m),'filetype',ft,'(6=MH_DYLIB) ncmds',nc)
-off=32
-for _ in range(nc):
-    c,s=struct.unpack_from('<II',d,off)
-    print('  cmd',hex(c),'size',s); off+=s
-print('size',len(d))
-PY
-          shasum -a 256 libvarfix.dylib
-
+      - name: toolchain
+        run: clang --version && ld.lld --version
+      - name: build varfix
+        run: clang -target arm64-apple-ios16.5 -O2 -nostdlib -fno-stack-protector -Wl,-e,_start -Wl,-platform_version,ios,16.5,16.5 -o varfix varfix_nolibc.c
+      - name: check varfix
+        run: python3 inspect.py varfix && sha256sum varfix
+      - name: build dylib
+        run: clang -target arm64-apple-ios16.5 -O2 -fPIC -dynamiclib -nostdlib -Wl,-undefined,dynamic_lookup -Wl,-install_name,/redwood/lib/libvarfix.dylib -Wl,-platform_version,ios,16.5,16.5 -o libvarfix.dylib libvarfix_dl.c
+      - name: check dylib
+        run: python3 inspect.py libvarfix.dylib && sha256sum libvarfix.dylib
       - uses: actions/upload-artifact@v4
         with:
           name: hakios-helpers
-          path: |
-            varfix
-            libvarfix.dylib
+          path: varfix
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hakios-helpers-dylib
+          path: libvarfix.dylib
