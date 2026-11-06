@@ -14,8 +14,41 @@ extern unsigned getuid(void);
 extern char *strchr(const char *, int);
 extern int atoi(const char *);
 extern long strtol(const char *, char **, int);
+extern long lseek(int, long, int);
+extern int fchmod(int, unsigned);
+extern int fchown(int, unsigned, unsigned);
 
 #define SKEL "/etc/var.skel"
+
+static char buf2[16384];
+
+static int
+copy_one(const char *src, const char *dst, int mode, unsigned uid, unsigned gid)
+{
+	char tmp[1024];
+	unsigned n = 0;
+	while (src[n] && n < sizeof(tmp) - 1) { tmp[n] = src[n]; n++; }
+	tmp[n] = 0;
+
+	int in = open(tmp, 0);
+	if (in < 0) return -1;
+	int out = open(dst, 1 | 0x200 /*O_WRONLY|O_CREAT*/, 0644);
+	if (out < 0) { close(in); return -1; }          /* 已存在就不覆盖 */
+	long got;
+	while ((got = read(in, buf2, sizeof(buf2))) > 0) {
+		long done = 0;
+		while (done < got) {
+			long w = write(out, buf2 + done, (ulong)(got - done));
+			if (w <= 0) { close(out); close(in); return -1; }
+			done += w;
+		}
+	}
+	close(out);
+	close(in);
+	chmod(dst, (unsigned)mode);
+	chown(dst, uid, gid);
+	return 0;
+}
 
 static int split_tabs(char *line, char **out, int max)
 {
@@ -35,7 +68,7 @@ __attribute__((constructor)) static void
 varfix_init(void)
 {
 	static char buf[16384];
-	int made = 0, links = 0;
+	int made = 0, links = 0, files = 0;
 	int fd = open(SKEL, 0);
 	if (fd >= 0) {
 		long n = read(fd, buf, sizeof(buf) - 1);
@@ -55,6 +88,9 @@ varfix_init(void)
 				} else if (c >= 3 && f[0][0] == 'l') {
 					symlink(f[1], f[2]);
 					links++;
+				} else if (c >= 6 && f[0][0] == 'f') {
+					copy_one(f[5], f[4], (int)strtol(f[1], 0, 8), (unsigned)atoi(f[2]), (unsigned)atoi(f[3]));
+					files++;
 				}
 				if (!end) break;
 				line = end + 1;
@@ -75,7 +111,10 @@ varfix_init(void)
 		for (const char *p = b; *p; p++) msg[l++] = *p;
 		if (made >= 100) { msg[l++] = '1'; msg[l++] = '0'; msg[l++] = '0'; msg[l++] = '+'; }
 		else { if (made >= 10) msg[l++] = (char)('0' + made / 10); msg[l++] = (char)('0' + made % 10); }
-		const char *c2 = " links=";
+		const char *c2 = " files=";
+		for (const char *p = c2; *p; p++) msg[l++] = *p;
+		msg[l++] = (char)('0' + files % 10);
+		const char *c2b = " links=";
 		for (const char *p = c2; *p; p++) msg[l++] = *p;
 		if (links >= 10) msg[l++] = (char)('0' + links / 10);
 		msg[l++] = (char)('0' + links % 10);
