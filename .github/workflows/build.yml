@@ -8,21 +8,38 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: toolchain
-        run: clang --version && ld.lld --version
+        run: |
+          clang --version || true
+          if ! command -v ld64.lld >/dev/null && ! command -v ld.lld >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq lld
+          fi
+          command -v ld64.lld || command -v ld.lld || echo "no lld"
+          ls /usr/lib/llvm-*/bin/ 2>/dev/null | grep -i lld | head
+
       - name: build varfix
-        run: clang -target arm64-apple-ios16.5 -O2 -nostdlib -fno-stack-protector -Wl,-e,_start -Wl,-platform_version,ios,16.5,16.5 -o varfix varfix_nolibc.c
-      - name: check varfix
-        run: python3 inspect.py varfix && sha256sum varfix
+        run: |
+          clang -target arm64-apple-ios16.5 -O2 -nostdlib -fno-stack-protector \
+            -fuse-ld=lld -Wl,-e,_start -Wl,-platform_version,ios,16.5,16.5 \
+            -o varfix varfix_nolibc.c
+          python3 inspect.py varfix
+          sha256sum varfix
+
       - name: build dylib
-        run: clang -target arm64-apple-ios16.5 -O2 -fPIC -dynamiclib -nostdlib -Wl,-undefined,dynamic_lookup -Wl,-install_name,/redwood/lib/libvarfix.dylib -Wl,-platform_version,ios,16.5,16.5 -o libvarfix.dylib libvarfix_dl.c
-      - name: check dylib
-        run: python3 inspect.py libvarfix.dylib && sha256sum libvarfix.dylib
+        run: |
+          clang -target arm64-apple-ios16.5 -O2 -fPIC -dynamiclib -nostdlib \
+            -fuse-ld=lld -Wl,-undefined,dynamic_lookup \
+            -Wl,-install_name,/redwood/lib/libvarfix.dylib \
+            -Wl,-platform_version,ios,16.5,16.5 \
+            -o libvarfix.dylib libvarfix_dl.c
+          python3 inspect.py libvarfix.dylib
+          sha256sum libvarfix.dylib
+
       - uses: actions/upload-artifact@v4
         with:
           name: hakios-helpers
-          path: varfix
-      - uses: actions/upload-artifact@v4
-        with:
-          name: hakios-helpers-dylib
-          path: libvarfix.dylib
+          path: |
+            varfix
+            libvarfix.dylib
