@@ -9,28 +9,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: toolchain
+      - name: build varfix (try entry variants)
         run: |
-          clang --version || true
-          if ! command -v ld64.lld >/dev/null && ! command -v ld.lld >/dev/null; then
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq lld
-          fi
-          command -v ld64.lld || command -v ld.lld || echo "no lld"
-          ls /usr/lib/llvm-*/bin/ 2>/dev/null | grep -i lld | head
-
-      - name: build varfix
-        run: |
-          clang -target arm64-apple-ios16.5 -O2 -nostdlib -fno-stack-protector \
-            -fuse-ld=lld -Wl,-e,_start -Wl,-platform_version,ios,16.5,16.5 \
-            -o varfix varfix_nolibc.c
-          python3 inspect.py varfix
-          sha256sum varfix
+          set -x
+          CF="clang -target arm64-apple-ios16.5 -O2 -nostdlib -fno-stack-protector -fuse-ld=lld -Wl,-platform_version,ios,16.5,16.5"
+          $CF -Wl,--entry=_start -o varfix_a varfix_nolibc.c && echo OK_A
+          $CF -Wl,-e,_start    -o varfix_b varfix_nolibc.c && echo OK_B
+          $CF -Wl,-e,_main     -o varfix_c varfix_nolibc.c && echo OK_C
+          for f in varfix_a varfix_b varfix_c; do
+            if [ -f $f ]; then echo "== $f"; python3 inspect.py $f; sha256sum $f; fi
+          done
+          true
 
       - name: build dylib
         run: |
-          clang -target arm64-apple-ios16.5 -O2 -fPIC -dynamiclib -nostdlib \
-            -fuse-ld=lld -Wl,-undefined,dynamic_lookup \
+          set -x
+          clang -target arm64-apple-ios16.5 -O2 -fPIC -dynamiclib -nostdlib -fuse-ld=lld \
+            -Wl,-undefined,dynamic_lookup \
             -Wl,-install_name,/redwood/lib/libvarfix.dylib \
             -Wl,-platform_version,ios,16.5,16.5 \
             -o libvarfix.dylib libvarfix_dl.c
@@ -41,5 +36,5 @@ jobs:
         with:
           name: hakios-helpers
           path: |
-            varfix
+            varfix_*
             libvarfix.dylib
