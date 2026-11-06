@@ -1,0 +1,44 @@
+name: build-ios-helpers
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 显示工具链
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-path
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: 编 varfix（可执行）
+        run: |
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          xcrun --sdk iphoneos clang -arch arm64 -miphoneos-version-min=16.5 -isysroot "$SDK" \
+            -O2 -o varfix varfix.c
+          file varfix || true
+          otool -l varfix | grep -E "filetype|LC_LOAD_DYLINKER" -A1 | head -8
+          shasum -a 256 varfix
+
+      - name: 编 libvarfix（dylib）
+        run: |
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          xcrun --sdk iphoneos clang -arch arm64 -miphoneos-version-min=16.5 -isysroot "$SDK" \
+            -O2 -dynamiclib -install_name /redwood/lib/libvarfix.dylib \
+            -o libvarfix.dylib libvarfix.c
+          file libvarfix.dylib || true
+          otool -l libvarfix.dylib | grep -E "filetype|LC_ID_DYLIB" -A2 | head -10
+          shasum -a 256 libvarfix.dylib
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hakios-helpers
+          path: |
+            varfix
+            libvarfix.dylib
