@@ -7,33 +7,53 @@ on:
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: 显示工具链
+      - name: 工具链
         run: |
-          xcodebuild -version
-          xcrun --sdk iphoneos --show-sdk-path
-          xcrun --sdk iphoneos --show-sdk-version
+          clang --version
+          ld.lld --version || true
 
-      - name: 编 varfix（可执行）
+      - name: 编 varfix（纯系统调用，静态 Mach-O，arm64）
         run: |
-          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-          xcrun --sdk iphoneos clang -arch arm64 -miphoneos-version-min=16.5 -isysroot "$SDK" \
-            -O2 -o varfix varfix.c
+          clang -target arm64-apple-ios16.5 -O2 -nostdlib -fno-stack-protector \
+                -Wl,-e,_start -Wl,-platform_version,ios,16.5,16.5 \
+                -o varfix varfix_nolibc.c
           file varfix || true
-          otool -l varfix | grep -E "filetype|LC_LOAD_DYLINKER" -A1 | head -8
+          python3 - <<'PY'
+import struct
+d=open('varfix','rb').read()
+m,ct,cs,ft,nc,sc,fl,_=struct.unpack_from('<IiiIIIII',d,0)
+print('magic',hex(m),'filetype',ft,'(2=MH_EXECUTE) ncmds',nc)
+off=32
+for _ in range(nc):
+    c,s=struct.unpack_from('<II',d,off)
+    print('  cmd',hex(c),'size',s); off+=s
+print('size',len(d))
+PY
           shasum -a 256 varfix
 
-      - name: 编 libvarfix（dylib）
+      - name: 编 libvarfix.dylib（dynamic_lookup，arm64）
         run: |
-          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-          xcrun --sdk iphoneos clang -arch arm64 -miphoneos-version-min=16.5 -isysroot "$SDK" \
-            -O2 -dynamiclib -install_name /redwood/lib/libvarfix.dylib \
-            -o libvarfix.dylib libvarfix.c
+          clang -target arm64-apple-ios16.5 -O2 -fPIC -dynamiclib -nostdlib \
+                -Wl,-undefined,dynamic_lookup \
+                -Wl,-install_name,/redwood/lib/libvarfix.dylib \
+                -Wl,-platform_version,ios,16.5,16.5 \
+                -o libvarfix.dylib libvarfix_dl.c
           file libvarfix.dylib || true
-          otool -l libvarfix.dylib | grep -E "filetype|LC_ID_DYLIB" -A2 | head -10
+          python3 - <<'PY'
+import struct
+d=open('libvarfix.dylib','rb').read()
+m,ct,cs,ft,nc,sc,fl,_=struct.unpack_from('<IiiIIIII',d,0)
+print('magic',hex(m),'filetype',ft,'(6=MH_DYLIB) ncmds',nc)
+off=32
+for _ in range(nc):
+    c,s=struct.unpack_from('<II',d,off)
+    print('  cmd',hex(c),'size',s); off+=s
+print('size',len(d))
+PY
           shasum -a 256 libvarfix.dylib
 
       - uses: actions/upload-artifact@v4
