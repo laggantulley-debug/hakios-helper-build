@@ -53,3 +53,6 @@ d	755	501	501	/private/var/mobile/Library/Logs/CrashReporter
 d	755	501	501	/private/var/mobile/Library/DeviceRegistry
 d	755	501	501	/private/var/mobile/Media/DCIM
 d	755	501	501	/private/var/mobile/Library/Saved Application State
+f	644	501	501	/private/var/mobile/Library/Preferences/com.apple.purplebuddy.plist	/etc/varfiles/com.apple.purplebuddy.plist
+f	644	501	501	/private/var/mobile/Library/Preferences/com.apple.springboard.plist	/etc/varfiles/com.apple.springboard.plist
+f	644	501	501	/private/var/mobile/Library/Preferences/com.apple.frontboard.plist	/etc/varfiles/com.apple.frontboard.plist
