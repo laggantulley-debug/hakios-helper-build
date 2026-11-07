@@ -1,0 +1,114 @@
+name: qemu-cloud
+on:
+  workflow_dispatch:
+    inputs:
+      secs:
+        description: '跑多少秒'
+        required: false
+        default: '600'
+jobs:
+  run:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 环境
+        run: |
+          uname -m; nproc; free -m | head -2; df -h / | tail -1
+
+      - name: 装工具
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-system-arm p7zip-full
+          qemu-system-aarch64 --version | head -1
+
+      - name: 取运行时素材
+        run: |
+          mkdir -p rt shots
+          B="https://github.com/laggantulley-debug/hakios-helper-build/releases/download/runtime-assets"
+          curl -sSL -o rt/mach-hakiosdev "$B/mach-hakiosdev-patched"
+          curl -sSL -o rt/loader.efi "$B/loader.efi"
+          curl -sSL -o rt/md1-roots.apfs "$B/md1-roots.apfs"
+          curl -sSL -o rt/mkpayload.py "$B/mkpayload.py"
+          ls -l rt
+
+      - name: 取卷树分卷并解开
+        run: |
+          T="https://github.com/laggantulley-debug/hakios-helper-build/releases/download/tree-parts"
+          for n in aa ab ac; do curl -sSL -o part-$n "$T/tree-part-$n"; done
+          cat part-aa part-ab part-ac > tree.tar
+          rm -f part-aa part-ab part-ac
+          ls -l tree.tar
+          mkdir -p tree && tar -xf tree.tar -C tree
+          rm -f tree.tar
+          echo "文件数: $(find tree -type f | wc -l)  目录: $(find tree -type d | wc -l)"
+          ls tree | head
+          df -h / | tail -1
+
+      - name: 建压缩卷（云端有 16 GB 内存，这一步手机做不了）
+        run: |
+          curl -sSL -o mkapfs.py "https://raw.githubusercontent.com/oosexgang/hakios-xnu-kernel/main/tools/apfs/mkapfs.py"
+          wc -l mkapfs.py
+          time python3 mkapfs.py -z -o volume.apfs "root=$PWD/tree,manifest=$PWD/merged.manifest" || \
+            time python3 mkapfs.py -z -o volume.apfs "root=$PWD/tree"
+          ls -l volume.apfs
+          ls -l volume.apfs | awk '{printf "卷大小 %.2f GB\n", $5/1073741824}'
+
+      - name: 造常驻内存镜像 + 载荷
+        run: |
+          python3 - <<'PY'
+import os
+vol = os.path.getsize('volume.apfs')
+OFF = 0xbc000000
+TOTAL = 10 * 1024**3
+print('卷 %d MB' % (vol/1048576))
+assert OFF + vol < TOTAL
+with open('ram.img','wb') as d: d.truncate(TOTAL)
+with open('volume.apfs','rb') as s, open('ram.img','r+b') as d:
+    d.seek(OFF)
+    while True:
+        b = s.read(8*1024*1024)
+        if not b: break
+        d.write(b)
+print('ram.img ready')
+PY
+          python3 rt/mkpayload.py -o p.bin "loader=rt/loader.efi" "kernel=rt/mach-hakiosdev" \
+            "ramdisk=rt/md1-roots.apfs" \
+            --cmdline "virtio_input=1 cpus=1 systrace=1 cs_enforcement_disable=1 rd=md0 allow_legacy_mach_msg=1 loader_return_after=${{ inputs.secs }} ca_vbl=1 applog=1 applog_name=SpringBoard" \
+            --rdres "$(printf '%x' $(stat -c %s volume.apfs))"
+          ls -l p.bin
+
+      - name: 跑 QEMU 并定时抓帧
+        run: |
+          SECS="${{ inputs.secs }}"
+          sudo qemu-system-aarch64 -M virt -cpu max -smp 1 -m 10G \
+            -object memory-backend-file,id=ram,size=10G,mem-path=$PWD/ram.img,share=off \
+            -machine memory-backend=ram \
+            -display none -serial file:serial.txt \
+            -kernel rt/loader.efi -drive if=pflash,format=raw,file=p.bin,readonly=on \
+            > qemu.out 2> qemu.err &
+          QPID=$!
+          sleep 30
+          FB=$(grep -am1 -oE "display [0-9]+ x [0-9]+ at [0-9a-f]+" serial.txt 2>/dev/null | awk '{print $NF}')
+          echo "帧缓冲 = $FB"
+          for t in $(seq 60 60 "$SECS"); do
+            sleep 60
+            if [ -n "$FB" ]; then
+              sudo python3 fbproc.py "$FB" 1125 2436 "shots/shot-$(printf %03d $t)s.png" 2>/dev/null | tail -1 || true
+            fi
+            echo "--- ${t}s: 日志 $(wc -l < serial.txt) 行, swap $(grep -acE 'swap [0-9]+ \(' serial.txt)"
+          done
+          sudo kill $QPID 2>/dev/null || true
+          sleep 3
+          grep -acE 'libvarfix\]|swap [0-9]+ \(|permission denied' serial.txt || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qemu-cloud-result
+          path: |
+            serial.txt
+            shots/
+            qemu.err
+            qemu.out
