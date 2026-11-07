@@ -61,7 +61,7 @@ jobs:
         run: |
           curl -sSL -o mkapfs.py https://raw.githubusercontent.com/oosexgang/hakios-xnu-kernel/main/tools/apfs/mkapfs.py
           wc -l mkapfs.py
-          time python3 mkapfs.py -z -o volume.apfs "root=$PWD/tree,manifest=$PWD/merged.manifest"
+          time python3 mkapfs.py -z --plain System/Cryptexes/OS/System/Library/Caches/com.apple.dyld -o volume.apfs "root=$PWD/tree,manifest=$PWD/merged.manifest"
           ls -l volume.apfs
 
       - name: 造常驻镜像与载荷
