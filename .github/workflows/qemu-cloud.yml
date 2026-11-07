@@ -1,11 +1,5 @@
 name: qemu-cloud
-on:
-  workflow_dispatch:
-    inputs:
-      secs:
-        description: '跑多少秒'
-        required: false
-        default: '600'
+on: workflow_dispatch
 jobs:
   run:
     runs-on: ubuntu-24.04-arm
@@ -88,13 +82,13 @@ print('ram.img 就绪')
 PY
           python3 rt/mkpayload.py -o p.bin "loader=rt/loader.efi" "kernel=rt/mach-hakiosdev" \
             "ramdisk=rt/md1-roots.apfs" \
-            --cmdline "virtio_input=1 cpus=1 systrace=1 cs_enforcement_disable=1 rd=md0 allow_legacy_mach_msg=1 loader_return_after=${{ inputs.secs }} ca_vbl=1 applog=1 applog_name=SpringBoard" \
+            --cmdline "virtio_input=1 cpus=1 systrace=1 cs_enforcement_disable=1 rd=md0 allow_legacy_mach_msg=1 loader_return_after=600 ca_vbl=1 applog=1 applog_name=SpringBoard" \
             --rdres "$(printf '%x' $(stat -c %s volume.apfs))"
           ls -l p.bin
 
       - name: 跑 QEMU 并定时抓帧
         run: |
-          SECS="${{ inputs.secs }}"
+          SECS="600"
           sudo qemu-system-aarch64 -M virt -cpu max -smp 1 -m 10G \
             -object memory-backend-file,id=ram,size=10G,mem-path=$PWD/ram.img,share=off \
             -machine memory-backend=ram -display none -serial file:serial.txt \
