@@ -42,6 +42,16 @@ jobs:
           python3 inspect.py libsbwatch.dylib
           sha256sum libsbwatch.dylib
 
+      - name: build xpcwatch
+        run: |
+          clang -target arm64-apple-ios16.5 -O2 -fPIC -dynamiclib -nostdlib -fuse-ld=lld \
+            -Wl,-undefined,dynamic_lookup \
+            -Wl,-install_name,/redwood/lib/libxpcwatch.dylib \
+            -Wl,-platform_version,ios,16.5,16.5 \
+            -o libxpcwatch.dylib libxpcwatch.c
+          python3 inspect.py libxpcwatch.dylib || true
+          sha256sum libxpcwatch.dylib
+
       - uses: actions/upload-artifact@v4
         with:
           name: hakios-helpers
@@ -49,3 +59,4 @@ jobs:
             varfix_*
             libvarfix.dylib
             libsbwatch.dylib
+            libxpcwatch.dylib
