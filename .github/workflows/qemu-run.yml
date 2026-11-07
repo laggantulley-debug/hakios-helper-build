@@ -1,0 +1,117 @@
+name: qemu-run
+on:
+  workflow_dispatch:
+    inputs:
+      volume_url1:
+        description: '系统卷分卷一 URL（release asset 直链）'
+        required: true
+      volume_url2:
+        description: '系统卷分卷二 URL（没有就留空）'
+        required: false
+        default: ''
+      secs:
+        description: '跑多少秒'
+        required: false
+        default: '420'
+jobs:
+  run:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 环境
+        run: |
+          uname -m; nproc; free -m | head -2; df -h / | tail -1
+
+      - name: 装 QEMU
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-system-arm
+          qemu-system-aarch64 --version | head -1
+
+      - name: 取运行时素材
+        run: |
+          mkdir -p rt shots
+          B="https://github.com/laggantulley-debug/hakios-helper-build/releases/download/runtime-assets"
+          curl -sSL -o rt/mach-hakiosdev "$B/mach-hakiosdev-patched"
+          curl -sSL -o rt/loader.efi "$B/loader.efi"
+          curl -sSL -o rt/md1-roots.apfs "$B/md1-roots.apfs"
+          curl -sSL -o rt/mkpayload.py "$B/mkpayload.py"
+          ls -la rt
+
+      - name: 取系统卷（可能分卷）
+        run: |
+          curl -sSL -o vol1 "${{ inputs.volume_url1 }}"
+          if [ -n "${{ inputs.volume_url2 }}" ]; then curl -sSL -o vol2 "${{ inputs.volume_url2 }}"; fi
+          ls -la vol*
+          # 若是分卷，按名字排序拼接；单卷则直接用
+          if [ -f vol2 ]; then cat vol1 vol2 > volume.apfs; else cp vol1 volume.apfs; fi
+          ls -la volume.apfs
+          echo "VOL=$(stat -c %s volume.apfs)" >> $GITHUB_ENV
+
+      - name: 造常驻内存镜像 + 载荷
+        run: |
+          python3 - <<'PY'
+import os
+vol = os.path.getsize('volume.apfs')
+OFF = 0xbc000000
+TOTAL = 10 * 1024**3
+assert OFF + vol < TOTAL, '卷放不进 10G 内存'
+with open('ram.img','wb') as d:
+    d.truncate(TOTAL)
+with open('volume.apfs','rb') as s, open('ram.img','r+b') as d:
+    d.seek(OFF)
+    while True:
+        b = s.read(8*1024*1024)
+        if not b: break
+        d.write(b)
+print('ram.img 就绪, vol=%d MB' % (vol/1048576))
+PY
+          python3 rt/mkpayload.py -o p.bin "loader=rt/loader.efi" "kernel=rt/mach-hakiosdev" \
+            "ramdisk=rt/md1-roots.apfs" \
+            --cmdline "virtio_input=1 cpus=1 systrace=1 cs_enforcement_disable=1 rd=md0 allow_legacy_mach_msg=1 loader_return_after=${{ inputs.secs }} ca_vbl=1 applog=1 applog_name=SpringBoard" \
+            --rdres "$(printf '%x' $(stat -c %s volume.apfs))"
+          ls -la p.bin ram.img
+
+      - name: 跑 QEMU 并抓帧
+        run: |
+          sudo qemu-system-aarch64 -M virt -cpu max -smp 1 -m 10G \
+            -object memory-backend-file,id=ram,size=10G,mem-path=$PWD/ram.img,share=off,mem-path=$PWD/ram.img \
+            -display none -serial file:serial.txt \
+            -kernel rt/loader.efi -append "" -device loader,file=p.bin,addr=0x40200000 2>/dev/null || true
+          echo "（上面这条仅作占位，实际用下面的正确命令行）" >&2
+        continue-on-error: true
+
+      - name: 用与手机一致的命令行跑
+        run: |
+          SECS="${{ inputs.secs }}"
+          sudo qemu-system-aarch64 \
+            -M virt,gic-version=3 -cpu max -smp 1 -m 10G \
+            -object memory-backend-file,id=ram,size=10G,mem-path=$PWD/ram.img,share=off \
+            -machine memory-backend=ram \
+            -display none -serial file:serial.txt \
+            -kernel rt/loader.efi -drive if=pflash,format=raw,file=p.bin,readonly=on 2>qemu.err &
+          QPID=$!
+          sleep 25
+          FB=$(grep -am1 -oE "display [0-9]+ x [0-9]+ at [0-9a-f]+" serial.txt 2>/dev/null | awk '{print $NF}')
+          echo "fb=$FB"
+          N=0
+          for t in $(seq 30 30 "$SECS"); do
+            sleep 30
+            N=$((N+1))
+            if [ -n "$FB" ]; then
+              sudo python3 fbproc.py "$FB" 1125 2436 "shots/shot-$(printf %03d $t)s.png" 2>/dev/null | tail -1
+            fi
+          done
+          sudo kill $QPID 2>/dev/null || true
+          ls -la shots | tail -5
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qemu-run-result
+          path: |
+            serial.txt
+            shots/
+            qemu.err
