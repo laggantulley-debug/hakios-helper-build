@@ -33,37 +33,50 @@ jobs:
           curl -sSL -o rt/mkpayload.py "$B/mkpayload.py"
           ls -l rt
 
-      - name: 取卷树分卷并解开
+      - name: 分块下载并逐卷解压（每块 95 MB）
         run: |
-          T="https://github.com/laggantulley-debug/hakios-helper-build/releases/download/tree-parts"
-          for n in aa ab ac; do curl -sSL -o part-$n "$T/tree-part-$n"; done
-          cat part-aa part-ab part-ac > tree.tar
-          rm -f part-aa part-ab part-ac
-          ls -l tree.tar
-          mkdir -p tree && tar -xf tree.tar -C tree
-          rm -f tree.tar
-          echo "文件数: $(find tree -type f | wc -l)  目录: $(find tree -type d | wc -l)"
+          B="https://github.com/laggantulley-debug/hakios-helper-build/releases/download/tree-chunks"
+          mkdir -p dl
+          # 六个逻辑卷：t-aa .. t-af，每卷 4-6 块
+          for base in t-aa t-ab t-ac t-ad t-ae t-af; do
+            for suf in aa ab ac ad ae af ag; do
+              url="$B/${base}-${suf}"
+              out="dl/${base}-${suf}"
+              curl -sSLf -o "$out" "$url" 2>/dev/null || { rm -f "$out"; continue; }
+              echo "取到 $(basename $out) $(stat -c %s $out) B"
+            done
+            ls dl/${base}-* >/dev/null 2>&1 || { echo "!! 卷 $base 没取到"; exit 1; }
+            cat dl/${base}-* > ${base}.gz
+            gunzip -f ${base}.gz
+            echo "$(basename ${base}) 解压完 $(stat -c %s ${base}) B"
+            rm -f dl/${base}-*
+          done
+          cat t-aa t-ab t-ac t-ad t-ae t-af > tree.tar
+          rm -f t-aa t-ab t-ac t-ad t-ae t-af
+          echo "tar $(stat -c %s tree.tar) B"
+
+      - name: 解包
+        run: |
+          mkdir -p tree && tar -xf tree.tar -C tree && rm -f tree.tar
+          echo "文件 $(find tree -type f | wc -l) 目录 $(find tree -type d | wc -l)"
           ls tree | head
           df -h / | tail -1
 
-      - name: 建压缩卷（云端有 16 GB 内存，这一步手机做不了）
+      - name: 云端建压缩卷（手机内存不够做这步）
         run: |
           curl -sSL -o mkapfs.py "https://raw.githubusercontent.com/oosexgang/hakios-xnu-kernel/main/tools/apfs/mkapfs.py"
           wc -l mkapfs.py
-          time python3 mkapfs.py -z -o volume.apfs "root=$PWD/tree,manifest=$PWD/merged.manifest" || \
-            time python3 mkapfs.py -z -o volume.apfs "root=$PWD/tree"
-          ls -l volume.apfs
-          ls -l volume.apfs | awk '{printf "卷大小 %.2f GB\n", $5/1073741824}'
+          time python3 mkapfs.py -z -o volume.apfs "root=$PWD/tree,manifest=$PWD/merged.manifest"
+          ls -l volume.apfs | awk '{printf "卷 %.2f GB\n", $5/1073741824}'
+          echo "--- 校验 var.skel ---"
+          head -3 tree/etc/var.skel; wc -l tree/etc/var.skel
 
-      - name: 造常驻内存镜像 + 载荷
+      - name: 造常驻镜像 + 载荷
         run: |
           python3 - <<'PY'
 import os
-vol = os.path.getsize('volume.apfs')
-OFF = 0xbc000000
-TOTAL = 10 * 1024**3
-print('卷 %d MB' % (vol/1048576))
-assert OFF + vol < TOTAL
+vol = os.path.getsize('volume.apfs'); OFF = 0xbc000000; TOTAL = 10 * 1024**3
+print('卷 %d MB' % (vol/1048576)); assert OFF + vol < TOTAL
 with open('ram.img','wb') as d: d.truncate(TOTAL)
 with open('volume.apfs','rb') as s, open('ram.img','r+b') as d:
     d.seek(OFF)
@@ -71,7 +84,7 @@ with open('volume.apfs','rb') as s, open('ram.img','r+b') as d:
         b = s.read(8*1024*1024)
         if not b: break
         d.write(b)
-print('ram.img ready')
+print('ram.img 就绪')
 PY
           python3 rt/mkpayload.py -o p.bin "loader=rt/loader.efi" "kernel=rt/mach-hakiosdev" \
             "ramdisk=rt/md1-roots.apfs" \
@@ -84,8 +97,7 @@ PY
           SECS="${{ inputs.secs }}"
           sudo qemu-system-aarch64 -M virt -cpu max -smp 1 -m 10G \
             -object memory-backend-file,id=ram,size=10G,mem-path=$PWD/ram.img,share=off \
-            -machine memory-backend=ram \
-            -display none -serial file:serial.txt \
+            -machine memory-backend=ram -display none -serial file:serial.txt \
             -kernel rt/loader.efi -drive if=pflash,format=raw,file=p.bin,readonly=on \
             > qemu.out 2> qemu.err &
           QPID=$!
@@ -97,11 +109,11 @@ PY
             if [ -n "$FB" ]; then
               sudo python3 fbproc.py "$FB" 1125 2436 "shots/shot-$(printf %03d $t)s.png" 2>/dev/null | tail -1 || true
             fi
-            echo "--- ${t}s: 日志 $(wc -l < serial.txt) 行, swap $(grep -acE 'swap [0-9]+ \(' serial.txt)"
+            echo "--- ${t}s: 行 $(wc -l < serial.txt) | swap $(grep -acE 'swap [0-9]+ \(' serial.txt) | SYNC-> $(grep -ac 'xpcwatch] ->' serial.txt) <- $(grep -ac 'xpcwatch] <-' serial.txt)"
           done
           sudo kill $QPID 2>/dev/null || true
           sleep 3
-          grep -acE 'libvarfix\]|swap [0-9]+ \(|permission denied' serial.txt || true
+          grep -ac 'libvarfix\]' serial.txt || true
 
       - uses: actions/upload-artifact@v4
         if: always()
