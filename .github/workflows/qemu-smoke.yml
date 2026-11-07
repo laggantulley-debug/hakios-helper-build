@@ -1,0 +1,23 @@
+name: qemu-smoke
+on: workflow_dispatch
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: 环境
+        run: |
+          uname -m
+          nproc
+          free -m | head -2
+      - name: 装 QEMU
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-system-arm
+          qemu-system-aarch64 --version | head -2
+      - name: 取运行时素材
+        run: |
+          mkdir -p rt
+          for f in mach-hakiosdev-patched loader.efi md1-roots.apfs mkpayload.py; do
+            curl -sSL -o rt/$f "https://github.com/laggantulley-debug/hakios-helper-build/releases/download/runtime-assets/$f" || echo "缺 $f"
+          done
+          ls -la rt
